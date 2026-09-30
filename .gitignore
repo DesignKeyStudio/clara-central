@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+.next/
+out/
+build/
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+prisma/.env
+prisma/env
+
+# Third-party agent skills — installed from skills-lock.json, not vendored here.
+# They carry their own upstream licenses (Apache-2.0 / MIT); committing copies
+# would mean carrying their notices too. Run `npx skills add` to restore them.
+.claude/skills/a11y-debugging/
+.claude/skills/chrome-devtools/
+.claude/skills/debug-optimize-lcp/
+.claude/skills/grill-me/
+.claude/skills/grilling/
+.claude/skills/handoff/
+.claude/skills/improve-codebase-architecture/
+.claude/skills/memory-leak-debugging/
+.claude/skills/supabase/
+.claude/skills/supabase-postgres-best-practices/
+.claude/skills/troubleshooting/
+.agents/
+
+# Prisma
+prisma/generated/
+
+# Testing
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+e2e/.auth/
+.playwright-mcp/
+qa/.media/
+qa/runs/**/media/
+
+# Storybook
+storybook-static/
+public/storybook/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Build logs from verification runs
+build.log
+nextbuild.log
+
+# Claude Code session transcripts (per-session changelogs — noise, don't commit)
+.claude/changelogs/

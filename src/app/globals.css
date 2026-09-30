@@ -1,0 +1,349 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* BRAND: fonts are registered in layout.tsx (IBM Plex Sans + Fraunces) */
+  --font-sans: var(--font-plex);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-plex);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-bg: var(--brand-bg);
+  --color-accent-bg: var(--accent-bg);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-invert-foreground: var(--invert-foreground);
+  --color-invert: var(--invert);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning: var(--warning);
+  --color-info-foreground: var(--info-foreground);
+  --color-info: var(--info);
+  --color-success-foreground: var(--success-foreground);
+  --color-success: var(--success);
+  --color-success-strong: var(--success-strong);
+  --color-destructive-foreground: var(--destructive-foreground);
+}
+
+:root {
+  /* 8px base ⇒ rounded-md 6px (buttons/inputs), rounded-xl 12px (cards), sm 4px. */
+  --radius: 0.5rem;
+
+  /* ── Surfaces ── warm manila-paper canvas; white cards lifted by shadow + border */
+  --background: #FFFDF9;          /* page canvas — warm off-white */
+  --foreground: #0A0A0A;          /* near-black ink */
+  --card: #FFFFFF;
+  --card-foreground: #0A0A0A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0A0A0A;
+
+  /* BRAND: Primary action — deep accounting green. */
+  --primary: #00685B;            /* accent (action) */
+  --primary-foreground: #F7F7F7; /* text-inverse */
+
+  /* Warm-gray interactive/subtle backgrounds (bg-hover) */
+  --secondary: #F7F5F3;
+  --secondary-foreground: #0A0A0A;
+  --muted: #F7F5F3;
+  --muted-foreground: #737373;   /* text-muted */
+  --accent: #F7F5F3;             /* shadcn "accent" = hover surface, NOT the green */
+  --accent-foreground: #0A0A0A;
+  --accent-bg: #ECF4EC;          /* soft green tint — table row hover, teal avatar, selected row */
+
+  --destructive: #BE3219;        /* brick red — "in the red" */
+  --border: #EFEDE9;             /* the single border value */
+  --input: #EFEDE9;
+  /* BRAND: Focus ring — accounting green */
+  --ring: #00685B;
+
+  /* BRAND: identity gold — wordmark, active nav, gold avatars (never actions) */
+  --brand: #865F11;
+  --brand-foreground: #F7F7F7;
+  --brand-bg: #F6F2EA;           /* soft gold surface — gold avatar background */
+
+  /* Chart palette — warm/muted register (green, gold, amber, brick, neutral) */
+  --chart-1: #00685B;
+  --chart-2: #865F11;
+  --chart-3: #8F5A0C;
+  --chart-4: #BE3219;
+  --chart-5: #9E9D9D;
+
+  /* BRAND: Sidebar — white, separated by border + soft warm shadow */
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #0A0A0A;
+  --sidebar-primary: #00685B;
+  --sidebar-primary-foreground: #F7F7F7;
+  /* Active nav item: warm-gray fill + BRAND gold label */
+  --sidebar-accent: #F7F5F3;
+  --sidebar-accent-foreground: #865F11;
+  --sidebar-border: #EFEDE9;
+  --sidebar-ring: #00685B;
+
+  /* Semantic tokens — desaturated, warm. green = in the black, red = in the red. */
+  --destructive-foreground: #F7F7F7;
+  --success: #009F69;            /* Approve action + "Approved" status — distinct from accent */
+  --success-foreground: #F7F7F7;
+  --success-strong: #00875A;     /* hover / pressed darken of success */
+  /* No blue/info hue in this palette — alias info to accent green. */
+  --info: #00685B;
+  --info-foreground: #F7F7F7;
+  --warning: #8F5A0C;            /* "Pending" / caution — muted amber */
+  --warning-foreground: #F7F7F7;
+  --invert: #0A0A0A;             /* toast / tooltip — inverts to dark ink */
+  --invert-foreground: #F7F7F7;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  /* BRAND: Dark mode primary — inverted to white */
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.985 0 0);
+  --chart-2: oklch(0.80 0 0);
+  --chart-3: oklch(0.65 0 0);
+  --chart-4: oklch(0.50 0 0);
+  --chart-5: oklch(0.35 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.985 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.65 0.17 163);
+  --success-foreground: oklch(0.985 0 0);
+  --info: oklch(0.62 0.19 245);
+  --info-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.82 0.14 85);
+  --warning-foreground: oklch(0.20 0.06 85);
+  --invert: oklch(0.985 0 0);
+  --invert-foreground: oklch(0.145 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    @apply bg-background text-foreground;
+    /* Kill the macOS elastic document overscroll (rubber-band). Without this, the
+       page bounces at its scroll limits and drags position:fixed overlays (dialogs)
+       with it — making an open dialog's header/footer "jump" when you over-scroll. */
+    overscroll-behavior: none;
+  }
+  :root {
+    color-scheme: light;
+    --sidebar-width: 290px;
+  }
+  /* Override the browser's autofill tint (Chrome's blue / Safari's yellow) so
+     prefilled inputs keep our own surface + ink colors. The 9999s transition is
+     the standard trick to keep the box-shadow fill from being repainted. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-text-fill-color: var(--foreground) !important;
+    -webkit-box-shadow: 0 0 0 1000px var(--card) inset !important;
+    box-shadow: 0 0 0 1000px var(--card) inset !important;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-in-out 0s;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+}
+
+/* Auth decorative panel — slow drifting "aurora" gradient + blinking caret. */
+@keyframes aurora {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate(-45%, -35%) scale(1);
+  }
+  25% {
+    transform: translate(55%, -25%) scale(1.15);
+  }
+  50% {
+    transform: translate(45%, 45%) scale(0.9);
+  }
+  75% {
+    transform: translate(-40%, 40%) scale(1.08);
+  }
+}
+
+/* Table header tint (light mode only) — faint warm strip (bg-subtle) */
+:root [data-slot="table"] thead tr {
+  background: #FEFCF6;
+}
+
+[data-slot="table"] thead th {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Table body rows ≈ 54px — calm, ledger density */
+[data-slot="table-cell"] {
+  height: 54px;
+}
+
+/* Whole-row hover tint (body rows only; header keeps its warm strip) */
+[data-slot="table"] tbody tr:hover {
+  background: #FCFAF9;
+}
+
+.dark [data-slot="table"] thead tr {
+  background: transparent;
+}
+
+.dark [data-slot="table"] tbody tr:hover {
+  background: var(--muted);
+}
+
+/* Dialog primary action = ink black (#0A0A0A), not the accent green.
+   Scoped to the default-variant button inside a dialog/alert-dialog; Cancel
+   (secondary/outline), destructive, and success variants are unaffected. */
+[data-slot="dialog-content"] [data-slot="button"][data-variant="default"],
+[data-slot="alert-dialog-content"] [data-slot="button"][data-variant="default"] {
+  background-color: #0A0A0A;
+}
+[data-slot="dialog-content"] [data-slot="button"][data-variant="default"]:hover,
+[data-slot="alert-dialog-content"] [data-slot="button"][data-variant="default"]:hover {
+  background-color: #262626;
+}
+
+/* ── Custom scrollbar — global ── */
+*,
+*::before,
+*::after {
+  scrollbar-width: thin;
+  scrollbar-color: #D8D4CC transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D8D4CC;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #BFB9AE;
+}
+
+/* Dark theme scrollbar */
+.dark,
+.dark * {
+  scrollbar-color: oklch(0.30 0 0) transparent;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.30 0 0);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.42 0 0);
+}
+
+/* ── Row highlight animation for newly created records ── */
+@keyframes row-highlight {
+  from { background-color: #ECF4EC; }
+  to { background-color: transparent; }
+}
+
+.dark [data-highlight="true"] {
+  animation: row-highlight-dark 2s ease-out;
+}
+
+@keyframes row-highlight-dark {
+  from { background-color: oklch(0.35 0 0 / 0.5); }
+  to { background-color: transparent; }
+}

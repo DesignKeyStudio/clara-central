@@ -1,0 +1,348 @@
+# CODEMAP.md
+
+> Project structure map, optimized for AI agents and humans navigating this codebase.
+> **Update this file in the same commit that adds, renames, or removes services, actions, hooks, queries, component categories, routes, or top-level folders.** Without this, the map rots and future Claude sessions waste tokens re-discovering structure.
+>
+> Companion docs: [CLAUDE.md](./CLAUDE.md) · [COMPONENT.md](./COMPONENT.md) (UI components catalog) · [DESIGN.md](./DESIGN.md) · [STACK.md](./STACK.md)
+
+## Where to add what
+
+| If you're adding... | Put it in... | Notes |
+|---------------------|--------------|-------|
+| New data model | `prisma/schema.prisma` | TypeID text PK (add prefix to `MODEL_ID_PREFIXES` in `src/lib/ids.ts`); index every FK; **domain tables carry `organizationId` (FK → `organizations`) — see Multi-tenancy**; migrate (see Database) |
+| New business logic | `src/lib/services/<entity>-service.ts` | Pure Prisma; **multi-tenant — takes `organizationId` as the first param and scopes every read/write to it** (plus `userId`/`partnerId` as needed). See Multi-tenancy |
+| Server Action wrapper | `src/lib/actions/<feature>.ts` (or `src/app/actions/`) | Thin `"use server"` wrapper; calls `getSessionContext()` then delegates to a service |
+| Notification (email/SMS) | `src/lib/notifications/` | Add a `notify*` fn in `index.ts` (resolves recipients + prefs, fans out); add its email template in `../email/templates.ts` + SMS copy in `sms.ts`. Called from actions, best-effort (never throws). **Every `notify*` fn takes `organizationId`** — admin fan-out is scoped to that org's admins (via `OrganizationMembership`) and a demo (`isDemo`) org sends nothing. Lifecycle events (invite/approve/reject) ignore prefs; informational ones respect `notifyByEmail`/`notifyBySms` |
+| Transactional email (transport) | `src/lib/email/` | Resend SDK; external I/O so NOT in `services/`. `index.ts` = low-level `sendEmail()` transport; `templates.ts` = green-branded templates. Usually you go through `notifications/`, not here directly |
+| React Query hook | `src/lib/queries/hooks.ts` + key in `keys.ts` | Wraps the server action |
+| Route loading skeleton | `src/app/.../<route>/loading.tsx` | Suspense fallback shown instantly on navigation. Compose `src/components/custom/page-skeletons.tsx` blocks to match the page shape |
+| New admin page | `src/app/admin/(panel)/<route>/page.tsx` | Server component: `getQueryClient()` → `prefetchQuery` (same key/action as the client hook) → wrap client in `HydrationBoundary`. Pair with a `loading.tsx`. Renders inside `AdminShell`; admin-only via the `(panel)` guard. Add the nav item to `src/lib/admin-nav.ts` |
+| New partner page | `src/app/partner/(panel)/<route>/page.tsx` | Renders inside the partner `PartnerShell` (sidebar); partner-only via the `(panel)` guard layout. Add the nav item to `src/lib/partner-nav.ts` |
+| New admin/partner *auth* page | `src/app/<portal>/(auth)/<route>/page.tsx` | Public (no session). Keep in `(auth)` — the `(panel)` guard would bounce unauthenticated visitors to `/`. Add to middleware `PUBLIC_ROUTES`/`ENTRY_ROUTES` |
+| New public page | `src/app/<route>/page.tsx` | Add to middleware `PUBLIC_ROUTES` if reachable without a session |
+| API / cron route handler | `src/app/api/<name>/route.ts` | `export async function GET/POST`. Cron routes: gate on `Authorization: Bearer ${CRON_SECRET}` + register in `vercel.json` `crons`. See `api/cron/cleanup-demo` |
+| New UI primitive | `src/components/ui/` (shadcn) or `src/components/reui/` (ReUI) | Don't edit existing primitives. Add entry to `COMPONENT.md` |
+| Generic app component | `src/components/custom/` | e.g., KpiCard, PageHeader. Add entry to `COMPONENT.md` |
+| Layout chrome | `src/components/layout/` | e.g., RoleSidebar (shared), AdminShell, PartnerShell. Add entry to `COMPONENT.md` |
+| Zod validation schema | `src/lib/validations/<context>.ts` | Used by React Hook Form |
+| Pure-logic unit test | `tests/unit/<name>.test.ts` | Vitest `integration` project, no DB. `pnpm test` |
+| DB-backed integration test | `tests/integration/<name>.int.test.ts` | Vitest `integration` project — real DB via `DATABASE_URL` (loaded by `tests/integration/setup.ts`); guard with `process.env.DATABASE_URL` + `describe.skip` so it skips when absent; self-clean created rows in `afterAll`. `pnpm test`. See `tests/integration/multi-org.int.test.ts` (tenant isolation) |
+| Brand/styling token | `src/lib/brand.ts` or `src/app/globals.css` | Also document in DESIGN.md |
+| E2E (browser) test — read-only | `e2e/<portal>/<name>.spec.ts` | Playwright. `admin/` & `partner/` start authenticated (saved session); `auth/` runs logged-out. `pnpm test:e2e`. See `e2e/README.md` |
+| E2E (browser) test — writes data | `e2e/<portal>/<name>.mut.spec.ts` | Name it `.mut.spec.ts` so it joins a mutations project (runs serially, reseeds via `afterEach`). Use `reseed()` from `e2e/reseed.ts` |
+| Per-feature QA runbook | `qa/runs/YYYY-MM-DD-<slug>.md` | Generated by the `qa-run` skill, which scaffolds `qa/` on first use; plain-English cases the `playwright-driver` subagent executes; transient (commit then delete once graduated) |
+
+## Project tree
+
+```
+src/
+├── app/
+│   ├── layout.tsx                    # Root: ThemeProvider → ReactQueryProvider → TooltipProvider
+│   ├── icon.svg                      # Favicon — Clara Central `C` glyph on a cream tile, corners rounded 11/120 (~9%, matches the pre-rebrand mark); auto-served by Next as <link rel=icon>
+│   ├── favicon.ico                   # Legacy favicon fallback (256×256 PNG-in-ICO, rounded to match icon.svg) for older browsers
+│   ├── apple-icon.png               # iOS home-screen touch icon (180×180) — deliberately full-bleed square, NOT pre-rounded: iOS applies its own squircle mask
+│   ├── page.tsx                      # Public landing — partner-first (sign in / apply); admin demoted to a small footer link
+│   ├── admin/                        # Admin Panel (password auth; admin-only via middleware)
+│   │   ├── (auth)/                   # UNGUARDED group — public auth pages (keep OUT of (panel))
+│   │   │   ├── login/page.tsx        # adminSignIn server action
+│   │   │   ├── forgot-password/page.tsx  # resetPasswordForEmail
+│   │   │   └── reset-password/page.tsx   # updateUser password
+│   │   └── (panel)/                  # GUARDED group — role-gated pages only
+│   │       ├── layout.tsx            # Server: role guard → AdminShell (sidebar)
+│   │       ├── page.tsx              # Admin dashboard — server prefetch (useDashboard) → DashboardClient
+│   │       ├── dashboard-client.tsx  # KPI cards (commission earned/paid/owed, active partners, pending apps, referrals, conversions, conversion rate) + commission-trend & referral-funnel charts; empty states; falls back to loading.tsx on cache miss
+│   │       ├── dashboard-charts.tsx  # "use client" recharts — CommissionTrendChart (area) + ReferralFunnelChart (horizontal bars); theme-resolved hex palette (useTheme), mounted-gated (recharts can't SSR)
+│   │       ├── loading.tsx           # Dashboard skeleton (header + 8 KPIs + 2 chart cards)
+│   │       ├── partners/             # Partners list — KPI cards + pending-applications section + DataTable
+│   │       │   ├── page.tsx          # Server wrapper (prefetch partners + invites) → PartnersClient
+│   │       │   ├── partners-client.tsx   # usePartners() + search + "Show rejected" toggle; pending + Invitations sections above; main list = approved (rejected-only when toggled); avatar in the name cell; "Invite Partner" → InvitePartnerDialog; row click → detail
+│   │       │   ├── pending-applications.tsx  # Pending-applications section above the list (DataTable + pendingColumns); Approve/Decline per row; renders nothing when none pending
+│   │       │   ├── invitations-section.tsx  # Outstanding (pending) invites section — useInvites(); per-row Resend / Copy-link / Revoke + status(pending/expired)/expiry (useResendInvite/useRevokeInvite); renders nothing when none
+│   │       │   ├── invite-partner-dialog.tsx  # "Invite a partner" modal (Dialog + RHF/zod) → useInvitePartner; form → "Invitation sent" link/copy view
+│   │       │   ├── partner-status-dialog.tsx  # Approve/Decline confirm (AlertDialog) → useSetPartnerStatus (decline maps to rejected); shared by the list row actions + the detail header
+│   │       │   ├── columns.tsx       # List column defs — partnerColumns + pendingColumns (focused subset); badges, currency, joined/last-login; name→link; Actions: View + Approve/Decline (useSetPartnerStatus)
+│   │       │   └── [id]/             # Partner detail — header, info card, KPIs, "Their referrals"
+│   │       │       ├── page.tsx      # Server wrapper (awaits params) → PartnerDetailClient
+│   │       │       ├── partner-detail-client.tsx  # usePartner(id) + layout (avatar in header); opens EditPartnerDialog + RecordPayoutDialog + DeletePartnerDialog
+│   │       │       ├── edit-partner-dialog.tsx    # "Edit partner" modal (Dialog + RHF/zod) → useUpdatePartner; AvatarField upload/remove (useSetPartnerAvatar/useRemovePartnerAvatar)
+│   │       │       ├── record-payout-dialog.tsx   # "Record a payout" modal (partner-level) → useRecordPayout; owed-cap stat boxes
+│   │       │       ├── delete-partner-dialog.tsx  # Destructive delete confirm (AlertDialog) → useDeletePartner; states the cascade (referrals/invoices/payouts), then routes to /admin/partners
+│   │       │       └── referral-columns.tsx       # "Their referrals" column defs (status + commission state)
+│   │       ├── referrals/            # Referrals list — every referral across all partners
+│   │       │   ├── page.tsx          # Server wrapper → ReferralsClient
+│   │       │   ├── referrals-client.tsx  # useReferrals() + search/status filter + toolbar; row click → detail
+│   │       │   ├── columns.tsx       # List column defs (partner link, contact, status, commission state, earned, date)
+│   │       │   └── [id]/             # Referral detail — info card, commission-window banner, KPIs, "Client invoices"
+│   │       │       ├── page.tsx      # Server wrapper (awaits params) → ReferralDetailClient
+│   │       │       ├── referral-detail-client.tsx  # useReferral(id); status menu + contract toggle + add-invoice + record-payment + delete (functional)
+│   │       │       ├── add-invoice-dialog.tsx      # "Add invoice" modal (Dialog + RHF/zod) → useAddInvoice, with commission preview
+│   │       │       ├── edit-invoice-dialog.tsx     # "Edit invoice" modal (prefilled) → useUpdateInvoice
+│   │       │       ├── record-payment-dialog.tsx   # "Record a payment" modal (referral-level) → useRecordPayout; soft over-owed warning (no hard cap)
+│   │       │       ├── delete-referral-dialog.tsx  # Destructive delete confirm (AlertDialog) → useDeleteReferral; states the cascade (invoices; payouts kept at partner level), then routes to /admin/referrals
+│   │       │       └── invoice-columns.tsx         # getInvoiceColumns({referral,readOnly?}) — inline status menu + Actions (edit/delete) + Paid/Public-note cols; readOnly = partner view (no menu/actions)
+│   │       ├── payouts/             # Payouts list — all commission payouts to partners (real data)
+│   │       │   ├── page.tsx          # Server wrapper → PayoutsClient
+│   │       │   ├── payouts-client.tsx  # usePayouts()/usePayoutsSummary() + KPIs (earned/paid/outstanding) + search + toolbar
+│   │       │   ├── edit-payout-dialog.tsx # "Edit payout" modal → useUpdatePayout (admin list Flow 4)
+│   │       │   └── columns.tsx       # List column defs (date, partner link, amount, notes) + Actions cell (edit via dialog / delete confirm → useDeletePayout)
+│   │       ├── marketing/            # Marketing materials — admin authoring (real data)
+│   │       │   ├── page.tsx          # Server wrapper → MarketingClient
+│   │       │   ├── marketing-client.tsx     # useMarketing() + section cards + item CARDS (grid, mirrors the partner cards); dnd-kit drag-reorder (sections & items, keyboard-accessible) → useReorderSections/useReorderItems; link Open+Copy; signed-URL download; each card's MaterialThumb prefers the admin-set cover image, then a raster thumbnail, then the FileTypeThumb box — clicking the thumbnail, the name, or the Eye button opens the MarketingPreviewDialog (image/PDF)
+│   │       │   ├── create-section-dialog.tsx
+│   │       │   ├── create-item-dialog.tsx   # file/link modes (RichTextEditor description); optional CoverImageField card cover (any kind) → useCreateFileItem/useCreateLinkItem cover param; discard-changes confirm on close
+│   │       │   ├── edit-item-dialog.tsx     # link/file metadata; file form also REPLACES the file → useReplaceFileItem; CoverImageField cover set/clear → useSetItemCover; discard-changes confirm on close
+│   │       │   ├── delete-section-dialog.tsx
+│   │       │   └── delete-item-dialog.tsx
+│   │       ├── audit-log/            # Activity log viewer — append-only audit trail (admin)
+│   │       │   ├── page.tsx          # Server wrapper → AuditLogClient
+│   │       │   ├── audit-log-client.tsx  # useActivityLog() + action/entity filters + search; paginated DataTable
+│   │       │   └── columns.tsx       # When / Actor / Action + Entity badges / Changes diff (from → to)
+│   │       ├── settings/             # Platform settings — commission defaults (admin)
+│   │       │   ├── page.tsx          # Server wrapper → SettingsClient
+│   │       │   └── settings-client.tsx  # useAppConfig()/useUpdateAppConfig() — standard rate + commission window form
+│   │       └── profile/              # Own account profile (from the sidebar account menu)
+│   │           ├── page.tsx          # Server wrapper (prefetch myProfile) → AdminProfileClient
+│   │           └── profile-client.tsx   # useMyProfile()/useUpdateMyProfile() — full name + phone + Email/SMS notification prefs; email read-only but changeable via shared ChangeEmailDialog
+│   ├── partner/                      # Partner Portal (OTP auth; partner-only via middleware)
+│   │   ├── (auth)/                   # UNGUARDED group — public auth pages
+│   │   │   └── login/page.tsx        # requestPartnerOtp / verifyPartnerOtp
+│   │   └── (panel)/                  # GUARDED group — partner-scoped, real data
+│   │       ├── layout.tsx            # Server: role guard → PartnerShell (reads partner_sidebar_collapsed cookie)
+│   │       ├── page.tsx              # My Referrals — server wrapper → MyReferralsClient
+│   │       ├── my-referrals-client.tsx  # useMyReferrals()/useMyPartnerSummary() + search/status filter; row click → /partner/referrals/[id]; "View payouts" + "Refer a contact"
+│   │       ├── columns.tsx           # My Referrals column defs (contact, status, commission state, last invoice, total commission) + row Delete action (submitted-only) → DeleteMyReferralDialog
+│   │       ├── refer-contact-dialog.tsx # "Refer a contact" modal (Dialog + RHF/zod) → useCreateReferral; requires email OR phone; commission-rate note
+│   │       ├── delete-my-referral-dialog.tsx  # Destructive confirm (AlertDialog) → useDeleteMyReferral; partner deletes own referral (submitted-only, server-enforced); optional redirectTo (detail page)
+│   │       ├── referrals/[id]/       # Partner-facing referral detail (read-only, own referrals only)
+│   │       │   ├── page.tsx          # Server wrapper (awaits params) → PartnerReferralDetailClient
+│   │       │   └── referral-detail-client.tsx  # useMyReferral(id); info card + commission-window banner + KPIs + read-only invoices (no privateNote); Delete button when submitted → DeleteMyReferralDialog(redirectTo=/partner)
+│   │       ├── payouts/              # Partner Payouts — own commission payments
+│   │       │   ├── page.tsx          # Server (async): reads getAppConfig().payoutCadenceNote → PartnerPayoutsClient
+│   │       │   ├── payouts-client.tsx   # useMyPayouts() + KPIs + admin-configured cadence note (hidden when blank) + search
+│   │       │   └── columns.tsx       # Payout column defs (date, amount, note to partner)
+│   │       ├── marketing/            # Partner Marketing — read-only library to share with prospects
+│   │       │   ├── page.tsx          # Server wrapper → PartnerMarketingClient
+│   │       │   ├── partner-marketing-client.tsx  # usePartnerMarketing() + section grids; owns MarketingPreviewDialog state
+│   │       │   └── material-card.tsx # One card: image thumbnail / FileTypeThumb (shared), type pill, description, Download (files) or Open+Copy (links); "View" → preview
+│   │       └── profile/              # Own account profile (from the sidebar account menu)
+│   │           ├── page.tsx          # Server wrapper (prefetch myProfile) → PartnerProfileClient
+│   │           └── profile-client.tsx   # useMyProfile()/useUpdateMyProfile() — AvatarField profile picture (useUpdateMyAvatar/useRemoveMyAvatar) + contact fields + Email/SMS notification prefs; email read-only but changeable via shared ChangeEmailDialog
+│   ├── invite/                       # Public partner onboarding (token-gated; in middleware PUBLIC_ROUTES)
+│   │   └── [token]/                  # Onboarding from an admin invite link
+│   │       └── page.tsx              # Server: getValidInviteByToken(token) → <OnboardingForm mode="invite"> (or "invitation unavailable")
+│   ├── apply/                        # Public partner self-registration ("Apply to join"; in middleware PUBLIC_ROUTES)
+│   │   ├── page.tsx                  # Server: AuthShell → ApplyFlow
+│   │   └── apply-flow.tsx            # Client: <OnboardingForm mode="apply"> ↔ "Application received" (pending) screen
+│   ├── r/                            # Public per-partner referral links (code-gated; in middleware PUBLIC_ROUTES)
+│   │   └── [code]/                   # Landing for a partner's shareable link (code = Partner.referralCode)
+│   │       ├── page.tsx              # Server: getPartnerByReferralCode(code) → capture form when approved, else "unavailable" card
+│   │       └── referral-landing-form.tsx  # Client: lead-capture (referContactSchema) → createReferralFromLink → "thanks" screen
+│   ├── terms/                        # Public referral-partner Terms & Conditions (in middleware PUBLIC_ROUTES)
+│   │   └── page.tsx                  # Static legal doc (authored JSX, brand-styled); linked from OnboardingForm's "terms & conditions" checkbox
+│   ├── actions/                      # Server Actions ("use server")
+│   │   ├── auth.ts                   # adminSignIn, requestPartnerOtp, verifyPartnerOtp, signOutAction
+│   │   ├── partners.ts               # getPartnersAction / getPartnerAction / updatePartnerAction (email-unique across Partner + UserProfile) / setPartnerStatusAction (idempotent + pending-only guard; approve blocks emails already tied to another account via emailInUse, then provisions OR reclaims auth user for self-signups via provisionPartnerAuthUser + emails; reject emails applicant) / deletePartnerAction (cascade-deletes referrals/invoices/payouts + best-effort tears down auth user + UserProfile + `deleted` audit snapshot) / invitePartnerAction (returns expiresAt; blocks duplicate active invite) + getInvitesAction / revokeInviteAction (→ revoked) / resendInviteAction (refresh expiry + re-email) + partner-avatar moderation: preparePartnerAvatarUploadAction / setPartnerAvatarAction / removePartnerAvatarAction (admin-gated → partner-service + invite-service + avatar-storage)
+│   │   ├── onboarding.ts             # PUBLIC: completeOnboardingAction (invite → provisionPartnerAuthUser [create OR reclaim orphan] → acceptInvite → mint session → /partner) + applyToJoinAction (self-signup → create pending partner; routes an already-invited email to their invite link via getActiveInviteByEmail instead of duplicating)
+│   │   ├── demo.ts                   # PUBLIC: startDemoAction(role) — reuse the visitor's un-cleaned demo org via the `cb_demo` cookie (provision the role's principal if missing) OR mint a fresh isDemo org (cap-guarded) + seedOrgData + provision principal; plants an SSR session (generateLink→verifyOtp) → /admin|/partner. See the Demo environment flow
+│   │   ├── referrals.ts              # getReferralsAction / getReferralAction + updateReferralStatusAction (emails partner on notable transitions: deal_closed/lost/not_qualified) / setContractEndedAction / addInvoiceAction (emails partner) / updateInvoiceAction / deleteInvoiceAction / deleteReferralAction (cascade-deletes invoices, nulls payouts' referralId, `deleted` audit snapshot) / setInvoiceStatusAction (admin-gated → referral-service) · PUBLIC createReferralFromLink(code, input) — resolves the partner by referralCode (approved only), creates a `submitted` referral, best-effort audit + `sendNewLeadEmail`
+│   │   ├── payouts.ts                # getPayoutsAction / getPayoutsSummaryAction / recordPayoutAction (emails partner) / updatePayoutAction / deletePayoutAction (admin-gated → payout-service; NO owed cap — over-payment allowed per spec, soft-warned in the dialog)
+│   │   ├── app-config.ts             # getAppConfigAction / updateAppConfigAction (admin-gated → app-config-service)
+│   │   ├── dashboard.ts              # getDashboardAction (admin-gated → dashboard-service.getDashboardData)
+│   │   ├── marketing.ts              # admin-gated section/item CRUD + reorder + signed upload/download/replace (replaceFileItemAction); optional per-item cover image (any kind) via prepareCoverUploadAction + setItemCoverAction; getMarketingAction (admin) + getPartnerMarketingAction (ANY logged-in) both return EnrichedMarketingSection[] via the shared enrichMarketingSections() helper (batch inline thumbnail + coverImageUrl + previewable flag; a hidden cover suppresses the file's own thumbnail); ANY logged-in: getMarketingDownloadUrlAction + getMarketingPreviewUrlAction (on-demand inline preview, png/jpg/jpeg/pdf only) (→ marketing-service + marketing-storage)
+│   │   ├── audit-log.ts              # getActivityLogAction (admin-gated → activity-service.listActivity)
+│   │   ├── partner-portal.ts         # partner-gated: getMyReferralsAction / getMyReferralAction(id) / getMyPayoutsAction / getMyPartnerSummaryAction / createReferralAction / deleteMyReferralAction (submitted-only + ownership-scoped hard delete + `deleted` audit) (all scoped to the caller's own partnerId; getMyReferralAction returns null for referrals they don't own)
+│   │   └── account.ts                # role-aware own-profile: getMyProfileAction / updateMyProfileAction (kind-tagged: admin = name/phone + Email/SMS notification prefs, partner = contact card + Email/SMS notification prefs; email read-only; mirrors fullName to auth user_metadata) + partner avatar: prepareAvatarUploadAction / setMyAvatarAction / removeMyAvatarAction (signed upload → public avatars bucket) + role-aware change-email flow: requestEmailChangeAction / verifyEmailChangeAction (admin + partner, mocked OTP like login, gated by NEXT_PUBLIC_PARTNER_OTP_EMAIL; syncs email across auth.users + UserProfile, plus Partner for partners, lower-cased) (→ partner-service + user-profile-service + avatar-storage)
+│   ├── auth/callback/route.ts        # Supabase auth callback (password reset)
+│   ├── demo/                         # PUBLIC demo entry (?role=admin|partner) — page.tsx (server, resolves role) → demo-launcher.tsx ("use client" spinner; fires startDemoAction on mount, redirects into the panel or shows an error)
+│   └── api/cron/cleanup-demo/route.ts # Vercel Cron (daily, CRON_SECRET-gated): reap isDemo orgs idle > 30d — delete org (cascade) + their global UserProfile rows + Supabase auth users
+├── components/
+│   ├── ui/                           # shadcn/ui primitives (do not edit)
+│   ├── reui/                         # ReUI components (data-grid, badge, filters, timeline, etc.)
+│   ├── custom/                       # Generic app components (KpiCard, PageHeader, TimeRangeSelect [controlled Any time/7d/30d/90d list-toolbar filter — pair with withinTimeRange() from lib/utils], UserAvatar [initials + optional imageUrl photo], AvatarField [round profile-picture picker], ChangeEmailDialog [two-step new-email → 6-digit-code flow, shared admin+partner, → request/verifyEmailChangeAction], page-skeletons, MarketingPreviewDialog + FileTypeThumb — shared admin+partner marketing preview/thumbnail, FileDropField + CoverImageField for marketing uploads, etc.)
+│   ├── layout/                       # RoleSidebar (shared, config-driven) + AdminShell/PartnerShell wrappers, BrandMark, AuthShell, HeaderUserMenu
+│   └── data-table/                   # DataTable + SortableHeader + ColumnVisibility
+├── hooks/
+│   ├── use-client-value.ts           # Read a browser-only value (window.location.*, "am I hydrated") without a mount effect — useSyncExternalStore, so no cascading render and no hydration mismatch. Use instead of useState + useEffect(() => setX(window…), [])
+│   ├── use-mobile.ts                 # Responsive breakpoint
+│   └── use-resend-countdown.ts       # Countdown gating the OTP "Resend code" control (login + change-email dialog)
+├── lib/
+│   ├── queries/                      # React Query layer
+│   │   ├── hooks.ts                  # Query hooks — usePartners()/usePartner(id) + useReferrals()/useReferral(id) + usePayouts()/usePayoutsSummary() + useDashboard() (admin overview) + useAppConfig() + useActivityLog(filters?) (all real); partner portal: useMyReferrals()/useMyPayouts()/useMyPartnerSummary() + useCreateReferral() + usePartnerMarketing() (+ imperative fetchMarketingPreviewUrl); account: useMyProfile()/useUpdateMyProfile() (own profile, both portals; router.refresh() on save so the sidebar name updates) + useUpdateMyAvatar()/useRemoveMyAvatar() (partner profile picture). Mutations: useUpdatePartner/useSetPartnerStatus/useDeletePartner/useInvitePartner + useInvites/useRevokeInvite/useResendInvite (invitations section) + useSetPartnerAvatar/useRemovePartnerAvatar (admin avatar moderation) + useDeleteMyReferral (partner deletes own submitted referral); useUpdateReferralStatus/useSetContractEnded/useAddInvoice/useUpdateInvoice/useDeleteInvoice/useDeleteReferral/useSetInvoiceStatus (carries optional paidDate); useRecordPayout/useUpdatePayout/useDeletePayout; useUpdateAppConfig; marketing CRUD + reorder + useReplaceFileItem + useSetItemCover (cover upload reused by create hooks). Partner portal also has useMyReferral(id)
+│   │   ├── keys.ts                   # Query key constants
+│   │   ├── config.ts                 # Shared QueryClient defaults (5min stale, 1 retry) — used by BOTH provider.tsx + server.ts
+│   │   ├── server.ts                 # getQueryClient() — per-request RSC QueryClient (React cache()) for page-level prefetch + dehydrate
+│   │   └── provider.tsx              # Browser QueryClientProvider (consumes config.ts)
+│   ├── services/                     # Pure business logic (no Next.js, no Supabase). Multi-tenant: every fn takes `organizationId` first + scopes to it (except documented global lookups: getPartnerByReferralCode, getValidInviteByToken)
+│   │   ├── organization-service.ts   # createOrganization({name,isDemo,id?}) — the ONLY way to mint a tenant (code-only, no UI); creates the org + its per-org AppConfig row in one tx. Also isDemoOrg(orgId) — the shared sandbox gate (notifications send nothing; change-email is refused). See Multi-tenancy
+│   │   ├── demo-service.ts           # Shared demo dataset + seedOrgData(orgId) (batched createMany; 4 partners/9 referrals/12 invoices/2 payouts) + liveDemoOrgCount()/findDemoPrimaryPartnerId(). Used by prisma/seed.ts (Default org) AND the /demo action (fresh demo orgs). Alias-free (tsx-safe); NO Supabase/Next imports
+│   │   ├── activity-service.ts       # logActivity() (input requires `organizationId`; accepts a `changes` diff) + diffChanges()/snapshot() helpers + listActivity(organizationId, filters?)/ActivityLogRow for the admin viewer
+│   │   ├── app-config-service.ts     # getAppConfig(organizationId)/updateAppConfig(organizationId, …) — per-org platform settings (standard rate + commission window months + payoutCadenceNote shown to partners), keyed by organizationId (@unique)
+│   │   ├── dashboard-service.ts      # getDashboardData() — admin-overview aggregates: commission earned/paid/owed (reuses getPayoutsSummary so KPIs reconcile with Payouts), active partners, pending applications, referral funnel (counts per status), conversion rate, 6-month commission trend (earned vs paid). Read-only; no new tables
+│   │   ├── invite-service.ts         # createPartnerInvite() (token gen + prefill; blocks an existing partner, another account/admin via emailInUse, OR a still-active invite for the email) / getValidInviteByToken() / getActiveInviteByEmail() (pending+unexpired, for the self-signup collision check) / listActiveInvites()→InviteListRow[] (pending only; derives isExpired) / revokeInvite() (→ revoked) / resendInvite() (refresh expiry, keep token) / acceptInvite() (provisions approved Partner + UserProfile in one tx); PartnerExistsError / AccountExistsError / ActiveInviteExistsError
+│   │   ├── partner-service.ts        # listPartners()/getPartnerDetail() (incl. conversionsCount + per-referral contactEmail) + updatePartner()/setPartnerStatus()/deletePartner() (cascade delete → snapshot+counts+userId) + createSelfSignupApplication()/approveSelfSignupPartner() (self-signup) + emailInUse() (case-insensitive email-taken check across Partner + UserProfile; the single source of truth reused by invite/apply/approve/edit flows) + getPartnerSummary() (partner-portal header + dashboard KPIs: referral/conversion counts, earned/paid/owed) + getPartnerProfile()/updatePartnerProfile()/updatePartnerAvatar() (partner self-service; mirror fullName + avatarUrl to the linked UserProfile); avatarUrl surfaced on PartnerListRow/PartnerDetail/PartnerProfile; view-model types + commission KPI derivation; exports round2/commissionWindow(…,validMonths)→{state,until,closeDate}/windowedCommission()/CommissionState
+│   │   ├── user-profile-service.ts   # getUserProfile()/updateUserProfile() — the auth-identity profile (UserProfile) for the admin account page (name + phone + Email/SMS notification prefs; email read-only)
+│   │   ├── referral-service.ts       # listReferrals()/getReferralDetail() + updateReferralStatus/setContractEnded/createInvoice/updateInvoice/deleteInvoice/deleteReferral (cascade delete → snapshot+invoiceCount+partnerId)/setInvoiceStatus (+ nextInvoiceNumber); partner-portal: listPartnerReferrals()/getPartnerReferralDetail() (own-only, strips invoice privateNote)/createReferral()/deletePartnerReferral() (ownership + submitted-only guard → tagged result); ReferralInvoiceRow carries paidDate/publicNote/privateNote; per-row `commission` is full-precision (round only at display — the windowed earned total is authoritative); commission from the owning partner's rate
+│   │   ├── payout-service.ts         # listPartnerPayouts(partnerId) (omits privateNote) + listPayouts() (admin; incl. referralId) + getPayoutsSummary() (platform earned/paid/owed, windowed) + recordPayout()/updatePayout()/deletePayout() — NO owed cap (over-payment allowed per spec); PayoutListRow/CommissionSummary types
+│   │   └── marketing-service.ts      # listMarketing() + section/item CRUD + reorder + replaceItemFile() (swaps a file item's blob, returns the old path) + updateItemCover() (set/clear a cover + coverHidden, returns the old path); view-models carry coverImagePath + coverHidden (force the placeholder even for image files); deletes return storage + cover paths + a snapshot for the audit trail
+│   ├── actions/                      # Server Actions (thin auth wrappers → services)
+│   │   ├── auth-context.ts           # getSessionContext() — { userId, role, organizationId, partnerId? }; role from app_metadata, organizationId from the user's OrganizationMembership (DB-authoritative)
+│   │   └── mappers.ts                # Date/Decimal → primitive helpers (wire serialization)
+│   ├── supabase/                     # Supabase Auth + Storage (real + mocked)
+│   │   ├── client.ts                 # Browser client (auth) — checks NEXT_PUBLIC_PROTOTYPE_MODE
+│   │   ├── server.ts                 # Server client (auth cookies)
+│   │   ├── admin.ts                  # Service role (auth admin ops + Storage)
+│   │   ├── partner-auth.ts           # provisionPartnerAuthUser(admin, {email, fullName}) — create the partner auth user OR reclaim an ORPHAN (auth.users row no UserProfile/Partner.userId references, e.g. left by a reseed); returns {userId} | {conflict}. Bridges Supabase Auth + Prisma. Shared by onboarding (invite) + partners (approve)
+│   │   ├── middleware.ts             # Session refresh + two-portal guards — keeps authoritative getUser() (the refresh point)
+│   │   ├── claims.ts                 # getClaimsUser() — local JWT verification via getClaims() (no Auth-server hop); hot-path replacement for getUser() in getSessionContext/server-user/signOut
+│   │   ├── server-user.ts            # getPlatformServerUser() — email, name, role (via getClaimsUser)
+│   │   ├── mock-client.ts            # PROTOTYPE_MODE auth mock + demo user (role: admin); mocks getUser + getClaims
+│   │   ├── buckets.ts                # Storage bucket names — MARKETING_BUCKET (private) + AVATAR_BUCKET (public) (client-safe constants)
+│   │   ├── marketing-storage.ts      # service-role Storage: signed upload/download (attachment) + inline-preview URLs (createMarketingPreviewUrl[s]) gated to an inline-safe ext allowlist (png/jpg/jpeg/pdf — SVG stays attachment-only) + remove
+│   │   └── avatar-storage.ts         # service-role Storage for the PUBLIC avatars bucket: createAvatarUploadUrl (signed upload) + avatarPublicUrl (stable public URL) + pruneAvatarObjects (drop a partner's old avatars by folder prefix)
+│   ├── email/                        # Transactional email (Resend) — external I/O, the email channel for notifications/
+│   │   ├── client.ts                 # getResend() (null in prototype / no RESEND_API_KEY) + resolveFrom() (EMAIL_FROM, default onboarding@resend.dev)
+│   │   ├── templates.ts              # green-branded shell() (deep-green header band, matches the Supabase Auth OTP templates configured in the Supabase dashboard) + partner templates (invite/approved/payout/referralStatus/invoice/newLead/rejected) + admin templates (adminNewSignup/adminPartnerOnboarded/adminNewReferral) → { subject, html, text } (inline-styled, email-safe hex)
+│   │   └── index.ts                  # sendEmail(to, content, label) — low-level Resend transport; best-effort, never throws, returns accepted boolean
+│   ├── notifications/                # Unified notification dispatcher — called from actions; resolves recipients + channel prefs, fans out to email + SMS
+│   │   ├── index.ts                  # notify* per-event fns (partner: Invited/Approved/Rejected [lifecycle, email-only, ignore prefs] + NewLead/ReferralStatusChanged/InvoiceIssued/PayoutRecorded; admin: NewSignup/PartnerOnboarded/NewReferral [fan out to that org's active admins]). All take organizationId: admin fan-out is org-scoped (OrganizationMembership) and demo (isDemo) orgs are suppressed (no real mail from the sandbox). Informational events respect notifyByEmail/notifyBySms (SMS needs a phone). Best-effort
+│   │   └── sms.ts                    # sendSms(to, msg, label) — STUB (console.log) until TWILIO_* env is set (no twilio package yet; single // TODO(twilio) seam) + smsCopy per-event message builders
+│   ├── validations/                  # Zod schemas (React Hook Form) — auth.ts (admin login/reset + partner OTP), account.ts (updateAdminProfileSchema [name/phone + notify prefs] + email-change schemas), partner.ts (updatePartnerSchema + updatePartnerProfileSchema + prepareAvatarUploadSchema + invitePartnerSchema + completeOnboardingSchema + applyToJoinSchema), referral.ts (createInvoiceSchema + referContactSchema), payout.ts (recordPayoutSchema), app-config.ts (appConfigSchema), url.ts (optional/required URL), marketing.ts (section/item create+edit + file constraints + replaceFileItemSchema + cover-image constraints [validateCoverImage/ACCEPT_COVER_ATTR] + INLINE_PREVIEW_EXTS/canPreviewInline inline-preview policy). Shared field primitives (reused across the above for consistency): email.ts (emailSchema — trim + format), amount.ts (amountSchema + MIN_AMOUNT/MAX_AMOUNT — money $0.01–$100M), commission.ts (commissionRateSchema — 0.01–100%), name.ts (personNameSchema(label) factory + MAX_NAME_LENGTH=250), phone.ts (optionalUsPhoneSchema [strict US — the default across all phone fields] + formatUsPhone mask + isValidUsPhone; legacy optionalPhoneSchema [loose 7–15-digit] retained but unused)
+│   ├── sanitize.ts                   # sanitizeDescription() — server-side HTML allowlist for marketing rich-text
+│   ├── header/                       # header-user-display.ts (resolveHeaderDisplay)
+│   ├── brand.ts                      # Brand constants (BRAND_PRIMARY, BRAND_GRADIENT)
+│   ├── prisma.ts                     # Prisma singleton + $extends: auto-assigns TypeID `id` on create/createMany/upsert
+│   ├── rate-limit.ts                 # rateLimit(key, {limit, windowMs}) — in-memory fixed-window throttle (best-effort, per-process); blunts partner-OTP enumeration/spam
+│   ├── auth-flags.ts                 # partnerOtpEmailEnabled() — NEXT_PUBLIC_PARTNER_OTP_EMAIL gate shared by partner login + change-email actions (plain module, not "use server")
+│   ├── site-url.ts                   # resolveOrigin() — absolute origin (NEXT_PUBLIC_SITE_URL or request headers) for email/redirect links; shared by partner/payout/referral actions
+│   ├── ids.ts                        # TypeID helpers: MODEL_ID_PREFIXES map, newId(prefix), isId()
+│   ├── admin-nav.ts                  # ADMIN_NAV — { label, href, icon, end? } for the admin sidebar (Dashboard end:true, Partners, Referrals, Payouts, Marketing, Activity, Settings)
+│   ├── partner-nav.ts                # PARTNER_NAV — { label, href, icon, end? } for the partner sidebar (My Referrals end:true, Payouts, Marketing)
+│   ├── status-meta.ts                # partnerStatusMeta() / referralStatusMeta() / commissionStateMeta() → { label, tone } for StatusBadge
+│   └── utils.ts                      # cn(), formatDate(), formatCurrency(), getInitials(), slugify(), emailLocalPart(), parseLocalDate()/formatLocalDate()/todayLocalDate(), TimeRange + withinTimeRange() (list-toolbar time filter)
+└── types/index.ts                    # Base entity interfaces
+```
+
+```
+prisma/
+├── schema.prisma                     # Referral domain: 10 models, 9 enums. TypeID text PKs (partner_…, ref_…); uuid for auth-linked cols
+├── migrations/                       # initial_referral_schema = tables + FK/composite indexes + RLS-on-all + partial paid-invoice index; then partner/invite commission-rate + payout-cadence-note; add_partner_referral_code (TKT-002); add_referral_commission_rate snapshot (TKT-005); rls_policies (TKT-006); profile_fields (UserProfile.phone + Partner notify prefs); add_admin_notification_prefs (UserProfile.notify_by_email/notify_by_sms); add_partner_avatar (Partner.avatar_url). NOTE: the public `avatars` Storage bucket is created out-of-band (not in migrations) — see Storage below
+└── seed.ts                           # Demo data: admin (password) + 4 partners (1 linked to an auth user for OTP login), 9 referrals, 12 invoices, 2 payouts (marketing is user-managed — not seeded/cleared)
+```
+
+```
+e2e/                                  # Playwright E2E (real Supabase + Postgres; forces NEXT_PUBLIC_PROTOTYPE_MODE=false). Runner = @playwright/test (distinct from the Vitest/Storybook suites that use playwright as a lib)
+├── (playwright.config.ts at repo root)  # 6 projects: setup → auth-flows + admin/partner (read-only, storageState) → admin-mutations → partner-mutations; reuses a :3000 dev server or starts `next dev`. +2 opt-in walkthrough-admin/-partner projects (armed by WALKTHROUGH=1; video+trace+slowMo → ./qa/.media) for the qa-run skill's §5b recording step
+├── constants.ts                      # Seeded accounts (admin@example.com / jordan@diazgroup.com) + asserted seed figures; env-overridable
+├── helpers.ts                        # kpi() (scope a KpiCard value by its label) + openRow() (click a data-table row → wait for detail URL)
+├── reseed.ts                         # Restores the DB to seeded state (`prisma db seed`); mutating specs call it in afterEach
+├── auth.setup.ts                     # Signs in once per role → saves session to .auth/<role>.json (gitignored)
+├── auth/                             # Login + landing flows (run logged-OUT — exercises the login screens)
+├── admin/                            # Admin portal specs (start authenticated as admin)
+├── partner/                          # Partner portal specs (start authenticated as partner)
+└── **/*.mut.spec.ts                  # MUTATING specs (admin/partner-mutations projects): write to the DB, run serially, reseed after each test
+```
+Prereq: a seeded DB (`pnpm exec prisma db seed`). Scripts: `test:e2e`, `:e2e:ui`, `:e2e:headed`, `:e2e:report`. Read-only `*.spec.ts` are safe to run anytime; `*.mut.spec.ts` reseed the shared DB — don't run them alongside other testing on the same database.
+
+**`qa/` is generated, not committed here.** The `qa-run` skill (`.claude/skills/qa-run`) scopes a
+feature from the git diff, plans English cases, delegates live execution to the `playwright-driver`
+subagent, records results in a runbook, then graduates critical flows into `e2e/*.spec.ts`. On its
+first run in a repo without a `qa/` directory it scaffolds one — `qa/REFERENCE.md` (durable project
+invariants: commission, confidentiality, access-control, date rules, UI conventions), `qa/README.md`
+(runbook lifecycle and format), and `qa/runs/<date>-<slug>.md` per run. Runbooks are transient:
+committed with a feature, deleted once graduated. Not to be confused with the Playwright suite in
+`e2e/`.
+
+## Architecture: three-layer (Services → Actions → UI)
+
+```
+UI Components / React Query hooks
+        ↓ import from
+Server Actions (src/lib/actions/)        ← "use server", auth only
+        ↓ delegate to
+Services (src/lib/services/)             ← pure Prisma business logic
+        ↓
+Prisma Client → PostgreSQL
+```
+
+- **Services** — Pure business logic. **Multi-tenant: every fn takes `organizationId` as its first param and scopes all reads/writes to it** (plus `userId`/`partnerId` as needed). Zero Next.js or Supabase imports.
+- **Actions** — Thin `"use server"` wrappers. Call `getSessionContext()` for auth, then delegate to services.
+- **Adding a new data operation**: write logic in a service file first, then add a thin wrapper in actions, then a React Query hook.
+
+## React Query (server data)
+
+- Hooks in `src/lib/queries/hooks.ts`, keyed via `keys.ts`. Each wraps a server action — `usePartners()`/`usePartner(id)` (`partner-service`), `useReferrals()`/`useReferral(id)` (`referral-service`), `usePayouts()`/`usePayoutsSummary()` (`payout-service`), `useAppConfig()` (`app-config-service`), `useMarketing()` (`marketing-service`), and the partner-portal hooks `useMyReferrals()`/`useMyPartnerSummary()` (`referral-/partner-service`) + `useMyPayouts()` (`payout-service`) + `usePartnerMarketing()` (`marketing-service`, enriched with inline thumbnail URLs in the action layer) are all real data. `fetchMarketingDownloadUrl(id)` and `fetchMarketingPreviewUrl(id)` are imperative (signed URLs aren't cached; thumbnails are the one exception — minted server-side with a TTL longer than `staleTime`)
+- All hooks are always enabled, `staleTime: 5min`, 1 retry (defaults shared via `config.ts` between the browser provider and the RSC client)
+- **Reads are prefetched server-side, not fetched on mount.** Each `(panel)` `page.tsx` is a server component that calls `getQueryClient()` (`server.ts`), `prefetchQuery`s the same key+action the client hook uses, then wraps the client in `<HydrationBoundary state={dehydrate(qc)}>`. Prefetch in an RSC is a direct call to the read action (no POST hop), so it reuses the action's auth gate + return shape; the client hook reads hydrated cache (no refetch within `staleTime`). The page `await`s the prefetch, so each route has a `loading.tsx` to keep the navigation transition instant. Mutations are unchanged (client `useMutation` → server action)
+- Mutations + `queryClient.invalidateQueries()` are added per feature alongside their server actions. `useUpdatePartner(id)` (invalidates the partner, the partners list, **and** referrals — referral commission derives from the partner rate) and `useSetPartnerStatus()` (approve/reject). The referral-detail mutations (`useUpdateReferralStatus`/`useSetContractEnded`/`useAddInvoice`/`useSetInvoiceStatus`) share a `useInvalidateReferral(referralId, partnerId)` helper that busts the referral, referrals list, owning partner, and partners list (partner KPIs derive from invoices). The marketing mutation hooks (`useCreateSection`/`useRenameSection`/`useDeleteSection`/`useReorderSections`, `useCreateLinkItem`/`useCreateFileItem`/`useUpdateItem`/`useDeleteItem`/`useReorderItems`) all invalidate `queryKeys.marketing`; `useCreateFileItem` orchestrates prepare → direct browser upload → finalize
+
+## Zustand (client state)
+
+- No global store at present — the SaaS RBAC auth-store was removed in the reshape. Per-feature stores are re-introduced only when there's real client state to hold.
+- **Never select store methods as selectors** — use computed selectors instead
+
+## Auth flow (two portals)
+
+Landing `/` offers **Partner Portal** and **Admin Panel**. Roles live in Supabase **`app_metadata.role`** (`admin` | `partner`) — set at provisioning, not user-editable, safe for authz. All auth runs through server actions in `src/app/actions/auth.ts`.
+
+1. **Admin login** (`/admin/login`) — `adminSignIn()` → `signInWithPassword` → verifies `app_metadata.role === "admin"` → redirect `/admin`.
+2. **Partner login** (`/partner/login`) — `requestPartnerOtp()` (gates on approved partner, rate-limited per IP+email, then `signInWithOtp({ shouldCreateUser: false })` sends a real 6-digit email code) then `verifyPartnerOtp()` (`verifyOtp({ type: "email" })`, re-asserts `app_metadata.role === "partner"`, updates `lastLoginAt`) → redirect `/partner`. *PROTOTYPE_MODE:* the mock accepts any 6 digits and skips the role re-assert.
+3. **Admin password reset** — `/admin/forgot-password` → `resetPasswordForEmail()` → `/auth/callback?next=/admin/reset-password` → `updateUser`.
+4. **Sign out** — `signOutAction()` → `signOut` → redirect `/`.
+5. **Middleware** (`updateSession`) — refreshes tokens and enforces portal isolation: unauthenticated → `/`; admins confined to `/admin/*`, partners to `/partner/*`; authenticated users bounced off landing/login routes into their portal home.
+
+**Why each portal has `(auth)` + `(panel)` route groups:** the role guard (`redirect("/")` when there's no session) lives in `(panel)/layout.tsx` so it wraps *only* the gated pages. Public auth pages (`login`, `forgot-password`, `reset-password`) sit in `(auth)`, outside that layout. If they shared one `admin/layout.tsx`, an unauthenticated visit to `/admin/login` would render the guard layout first and bounce straight to `/` — a flash-then-redirect loop. Route-group folders don't appear in the URL, so paths stay `/admin/login`, `/admin`, etc. **Don't collapse the groups back into a single `admin/layout.tsx`.**
+6. **`getSessionContext()`** (`src/lib/actions/auth-context.ts`) — server actions call this to resolve `{ userId, role, organizationId, partnerId? }`; partners must be `approved`. `organizationId` = the user's `OrganizationMembership` (DB-authoritative, not from the JWT); iteration 1 assumes one membership per user (throws if none). See Multi-tenancy. Reads identity via `getClaimsUser` (`supabase/claims.ts`) — **local JWT verification** (`getClaims()`, no Auth-server round-trip), which is what removed the per-action navigation latency. Same for `getPlatformServerUser` + `signOutAction`. Middleware keeps the authoritative `getUser()` as the session-refresh + routing-revocation point. Tradeoff: a server-side revoked session stays valid until the access token expires (~1h) — bounded by middleware on next navigation, and mutations still hit live DB gates (partner approval / admin `isActive`). Requires asymmetric JWT signing keys enabled on the Supabase project for the local path (otherwise `getClaims()` falls back to a network call — correct, just not faster).
+7. **Invited-partner onboarding** — admin sends an invite (`invitePartnerAction` → `invite-service.createPartnerInvite`, stored token + prefill + commission rate; the invite email is sent via Resend — `src/lib/email` — and the dialog also shows the copyable link as a fallback). The invitee opens `/invite/<token>` (public), and `completeOnboardingAction` (`actions/onboarding.ts`) creates the Supabase auth user (`role: partner`), provisions an **already-approved** Partner (`entryType: invited`) via `invite-service.acceptInvite`, mints a session (same generateLink→verifyOtp trick as partner login), and redirects to `/partner` — no admin approval step.
+8. **Partner self-registration** — `/partner/login` links to the public `/apply` page (shared `OnboardingForm` in `apply` mode). `applyToJoinAction` creates a **`pending` / `self_signup`** Partner with **no auth user yet** (`partner-service.createSelfSignupApplication`); the page shows "Application received". An admin **Approves** from the Partners list — `setPartnerStatusAction` provisions the auth user + UserProfile and links it (`approveSelfSignupPartner`) so `verifyPartnerOtp` works. The partner then signs in via the normal OTP flow. **The auth user is created at approval, not at apply** — mirroring the invited flow's "auth user created when the partner becomes active".
+9. **Demo environment** — public `/demo?role=admin|partner` (linked only from the separate marketing site) → `demo/page.tsx` → `demo-launcher.tsx` fires `startDemoAction(role)` (`actions/demo.ts`). It mints a fresh `isDemo` org (cap-guarded at 500), seeds the shared demo dataset (`demo-service.seedOrgData`), provisions a throwaway Supabase auth user for the role (partner → linked to the org's primary seeded partner), plants a session (`generateLink→verifyOtp`), and redirects into the panel — each visitor gets a fully isolated sandbox. An httpOnly `cb_demo` cookie makes a re-visit **reuse** the same (un-cleaned) org, provisioning the other role's principal into it on demand. Idle demos (>30d by `Organization.lastActiveAt`) are reaped daily by the `api/cron/cleanup-demo` Vercel Cron (deletes org cascade + global UserProfile rows + auth users). Deferred: in-app demo banner, org-switcher.
+
+## Database
+
+- **Prisma is the primary data layer** — Supabase is used for `supabase.auth.*` and **Storage**. Two buckets: the private **`marketing`** bucket (file assets; signed URLs; `marketing-storage.ts`) and the public **`avatars`** bucket (partner profile pictures; stable public URLs; `avatar-storage.ts`). Storage calls live in the action layer, never in the pure services. **The `avatars` bucket is created out-of-band** (like `marketing` — no bucket SQL in migrations): `insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) values ('avatars','avatars', true, 5242880, array['image/png','image/jpeg'])`. Public bucket → reads need no policy; writes use service-role signed-upload URLs. `Partner.avatarUrl` (mirrored to `UserProfile.avatarUrl`) stores the resulting public URL.
+- **Multi-tenant (app-level scoping)** — see the **Multi-tenancy** section below. Two principals per org: `admin` + `partner` (`user_role`).
+- **12 models**: Organization, OrganizationMembership, UserProfile, Partner, Referral, Invoice, Payout, PartnerInvite, MarketingSection, MarketingItem, AppConfig, ActivityLog
+- **IDs**: domain tables use prefixed **TypeIDs** stored as `text`, auto-assigned by the `src/lib/prisma.ts` extension (`typeid-js`). Auth-linked columns (`UserProfile.id`, `Partner.userId`, …) stay native `uuid`.
+- **Commission** rate is **per-partner** (`Partner.commissionRate`) but **snapshotted per referral** (`Referral.commissionRate`, TKT-005): each referral captures the partner's rate at creation, and earned commission derives from **that snapshot** — so editing a partner's rate only affects **future** referrals, never re-pricing past ones. Earned commission is **derived, never stored**: per referral, `sum(paid invoices issued on/before the commission-window close) × the referral's snapshot rate`, summed across the partner's referrals — the window filter lives in `windowedCommission()`, so an invoice issued after the window closes (12-month timeout or an earlier `contractEndedAt`) does **not** accrue. All commission-computing reads (`partner-service`, `referral-service`, `payout-service.getPayoutsSummary`, `dashboard-service`) use `Referral.commissionRate`; partner-level displays (detail header, portal subtitle) still show the partner's live `commissionRate`. `Payout` rows record commission actually paid (partner-level when `referralId` is null, referral-level when set). Per the commission-engine spec there is **no owed cap** — recording/editing a payout above the owed balance is allowed and drives the outstanding balance negative; the record/edit dialog shows a non-blocking over-payment warning. The standard rate for new partners and the commission **window length** (months a referral keeps earning) come from the singleton `AppConfig` (`app-config-service`, editable at `/admin/settings`). (Migration `20260605120000_partner_commission_rate` moved the rate off `Referral`; `20260701121000_add_referral_commission_rate` re-added it as a per-referral **snapshot**, backfilled from each partner's current rate.)
+- **Public referral links** (TKT-002): `Partner.referralCode` (`@unique`) is a stable, hard-to-guess slug (`newReferralCode()` in `src/lib/ids.ts` — name slug + TypeID token) assigned wherever a Partner is created (`acceptInvite`, `createSelfSignupApplication`, seed). The public `/r/[code]` page + `createReferralFromLink` action attribute a captured lead to that partner; the partner sees + copies their link from the "Your referral link" card on `/partner` (`referral-link-card.tsx`, fed by `getPartnerSummary().referralCode`).
+- **RLS** is enabled on every table **and now carries policies** (`20260701122000_rls_policies`, TKT-006): partner principals (`auth.uid() = partners.user_id`) read only their own partner row + their own referrals/invoices/payouts; admins (JWT `app_metadata.role = 'admin'`, via `public.claracentral_is_admin()`) read across all rows; marketing + app_config are authenticated-read / admin-write; partner_invites + activity_log are admin-only; `anon` has no policy (fully denied). Prisma connects as the table **owner** and **bypasses RLS**, so the app is unaffected — the policies scope any current/future PostgREST / supabase-js access as defense in depth. No new role GRANTs were added (the surface is unchanged; policies only scope what the `authenticated` role can already reach).
+
+### Multi-tenancy (app-level scoping)
+
+- **Model.** Every domain row belongs to an `Organization` (FK `organizationId` on Partner, Referral, Invoice, Payout, PartnerInvite, MarketingSection, MarketingItem, AppConfig, ActivityLog). A user is linked to orgs via `OrganizationMembership` (many-to-many, `@@unique([userId, organizationId])`). `UserProfile` stays **global** (one row per Supabase auth identity). `role` stays global on `UserProfile` + the JWT (membership doesn't carry it yet).
+- **Enforcement is app-level, not RLS.** `getSessionContext()` resolves `organizationId` from the user's membership; every service takes it as the first param and scopes each query. Migration `20260714120000_multi_org_foundation` enables RLS (no policies) on the two new tables to match the dormant defense-in-depth posture — the app still bypasses it as owner. Isolation correctness lives in the service `where`/`data` clauses; a by-id write is gated by an org-scoped `findFirst` ownership check first.
+- **Uniqueness.** `Partner.email` and `Invoice.number` are unique **per-org** (`@@unique([organizationId, …])`) so seed/demo data can repeat across orgs. `Partner.referralCode` and `PartnerInvite.token` stay **globally** unique (they appear in public `/r/…` and `/invite/…` URLs). `Partner.userId` stays globally unique (a UserProfile maps 1:1 to a Partner in iteration 1).
+- **The Default org** (`ORG_DEFAULT_ID = "org_default"`, `src/lib/organization.ts`) holds all pre-multi-tenant data (backfilled by the migration) and is where org-less public self-signup (`/apply`) lands. It is `isDemo: false` — a future demo-cleanup job may only reap `isDemo` orgs.
+- **Creating orgs is code-only** — `organization-service.createOrganization()`. No UI, no `/demo` route, no per-org role, no org-switcher yet (all deferred to the future demo feature).
+- **Public/global-lookup exceptions** (no org param — org is derived from the looked-up row): `getPartnerByReferralCode(code)` and `getValidInviteByToken(token)`; `acceptInvite` provisions into `invite.organizationId`; partner OTP login looks up by email (real partners only — demo partners never use this page).
+
+> **Reshape status.** Auth + the SaaS-boilerplate cleanup are done — two-portal login (admin password / partner OTP) on the referral schema, build green. The sidebar chrome is built — a shared, config-driven `RoleSidebar` wrapped by `AdminShell` (and `PartnerShell`). The **Partners** list + detail (`/admin/partners/[id]`) and the **Referrals** list + detail (`/admin/referrals/[id]`) are wired to **real data** (`partner-service`/`referral-service` + their admin-gated `partners`/`referrals` actions; commission KPIs derived from invoices/payouts × the partner's rate). **Partners are editable**: row/View navigation, an "Edit partner" modal (`useUpdatePartner`), and Approve/Reject from the list (`useSetPartnerStatus`) — the first mutations in the app. **Referrals are editable too**: the detail page's pipeline-status menu, contract-ended toggle (reopen/close), Add-invoice modal, and inline invoice-status menu are functional (`useUpdateReferralStatus`/`useSetContractEnded`/`useAddInvoice`/`useSetInvoiceStatus`) — all recompute the owning partner's commission KPIs. The **Marketing** materials page (`/admin/marketing`) is now **real data**: full section + item CRUD — file uploads to a private Supabase Storage bucket via signed-upload URLs, link items, Tiptap rich-text descriptions sanitized server-side, reorder, and signed-URL downloads — through `marketing-service` + `actions/marketing.ts` + `marketing-storage.ts`. The admin **Payouts** list (`/admin/payouts`) is now **real data** (`payout-service.listPayouts` via `usePayouts()`), and admins can **record payouts** — partner-level from the partner detail page (`RecordPayoutDialog`) and referral-level from the referral detail page (`RecordPaymentDialog`), both via `useRecordPayout` → `recordPayoutAction` with a server-side owed cap. The new **Settings** page (`/admin/settings`) edits the singleton `AppConfig` (standard commission rate + commission-window months) via `useAppConfig`/`useUpdateAppConfig`; the window length now feeds `commissionWindow()` across the partner/referral services. Every admin feature page now has UI. The **`/admin` index is a real analytics dashboard** (was a redirect to Partners) — KPI cards + a commission-over-time area chart and a referral-funnel bar chart (recharts), fed by `dashboard-service.getDashboardData()`; it's now the admin's post-login home (`ADMIN_HOME`/`adminSignIn` redirect to `/admin`, brand mark links there).
+>
+> **Partner portal.** The partner side is now built on **real, partner-scoped data**: **My Referrals** (`/partner`) lists the signed-in partner's own referrals with their derived commission state, last-invoice date, and total commission, and the **Refer a contact** modal submits a new referral (`useCreateReferral` → `createReferralAction` → `referral-service.createReferral`). **Payouts** (`/partner/payouts`) shows the partner's own payouts + KPIs. All reads are gated to the caller's own `partnerId` via `actions/partner-portal.ts` (`requirePartner`) → `referral-service.listPartnerReferrals`, `payout-service.listPartnerPayouts`, `partner-service.getPartnerSummary`. The partner portal now has its own collapsible sidebar (`PartnerShell` → shared `RoleSidebar` with `PARTNER_NAV`), replacing the old lean top-bar `PortalShell`.
+>
+> **Audit + UX round.** `logActivity()` now writes a structured `changes` diff on every mutation (created snapshot / `{field:{from,to}}` / `{deletedRecord}`), and the new **Activity log** viewer (`/admin/audit-log`, admin-only) browses + filters it. Invite acceptance logs a `partner_invite` `status_changed`; partner login logs `entityType: user`. The list pages (admin partners/referrals/payouts, partner my-referrals/payouts) are **sorted + paginated** (clickable `SortableHeader` columns). Marketing reorder is **drag-and-drop** (dnd-kit, keyboard-accessible) and file items can have their **file replaced** in the edit dialog; admin link items gain an **Open** button. Inline "mark invoice paid" **prompts for the paid date**.
+
+### Prisma commands
+
+- `pnpm exec prisma generate` — regenerate client after schema changes
+- `pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` — generate SQL without a shadow DB (Supabase blocks `migrate dev`'s shadow database)
+- `pnpm exec prisma migrate deploy` — apply pending migrations over the direct connection
+- `pnpm exec prisma db seed` — run seed
+
+## Code conventions
+
+- `"use client"` on all interactive components and pages
+- Prisma queries use `include` for related data
+- camelCase everywhere — Prisma uses `@map` for snake_case DB columns
+- Role checks: role comes from `getSessionContext()` (server actions) / `PlatformServerUser.role` (shell); portal isolation is enforced in middleware
+- Forms: React Hook Form + Zod + shadcn Form components
+- Audit-worthy mutations call `logActivity()` (`src/lib/services/activity-service.ts`)
+- **Dates** (`src/lib/actions/mappers.ts`): serialize *instants* (`@db.Timestamptz` — `createdAt`/`joinedAt`/payout `paidAt`, and the commission-window timeout) with `toISOString()`, then format client-side with `format(parseISO(iso), …)` so they render in the **viewer's** timezone. Serialize *calendar dates* (`@db.Date` — invoice `issuedDate`/`paidDate`, `contractEndedAt`) with `toDateString()` (date-only `YYYY-MM-DD`) — these must show the same day for everyone, never TZ-shifted. For "today" defaults in date inputs use `todayLocalDate()` (`src/lib/utils.ts`), **never** `new Date().toISOString().slice(0,10)` (that's the UTC date and lands a day ahead west of UTC). For calendar-date form fields use the themed `DatePicker` (`src/components/custom/date-picker.tsx`) — string-in/out `YYYY-MM-DD`, timezone-safe via `parseLocalDate`/`formatLocalDate` — rather than native `<input type="date">`. For **date-range list filtering** use `TimeRangeSelect` + `withinTimeRange(iso, range)` (`src/lib/utils.ts`); it parses via `parseLocalDate` and counts calendar days in the viewer's timezone, inclusive of today (tests: `tests/unit/time-range.test.ts`).
+
+## ReUI components
+
+ReUI (https://reui.io) extends shadcn/ui with richer pre-built components.
+
+- **Install**: `pnpm dlx shadcn@latest add @reui/{component-name}`
+- **Location**: `src/components/reui/`
+- **Import**: `import { Component } from "@/components/reui/{name}"`
+- **Installed**: alert, badge, data-grid, autocomplete, filters, timeline, stepper, date-selector

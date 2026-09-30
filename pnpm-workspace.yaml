@@ -1,0 +1,32 @@
+# pnpm configuration
+#
+# Supply-chain hardening: do not install any package version that was
+# published less than `minimumReleaseAge` minutes ago. Malicious versions
+# from account/CI compromises are typically yanked within hours, so a
+# multi-day cooldown blocks them before they ever reach the lockfile.
+# (Defends against incidents like the axios 1.14.1 and @tanstack/*-router
+# 1.169.5/.8 compromises of 2026.)
+minimumReleaseAge: 4320 # 3 days, in minutes
+
+# Packages allowed to update immediately, bypassing the cooldown.
+minimumReleaseAgeExclude:
+  - '@types/*'
+
+# Run pre/post lifecycle hooks (e.g. `predev`). npm runs these by default;
+# pnpm does not unless this is enabled. Required for the prototype DB reset
+# that runs on `pnpm dev` via the `predev` script.
+enablePrePostScripts: true
+
+# Allowlist of dependencies permitted to run install/build scripts.
+# pnpm blocks all postinstall scripts by default; each entry below was
+# reviewed and is a well-known package that legitimately needs a build step
+# (native binary download or client codegen). Anything new gets blocked
+# until explicitly added here.
+onlyBuiltDependencies:
+  - '@prisma/client' #  Prisma Client codegen
+  - '@prisma/engines' # Prisma query-engine binaries
+  - prisma #            Prisma CLI
+  - esbuild #           platform binary download (vite/vitest/storybook)
+  - sharp #             native image pipeline (next/image)
+  - msw #               Mock Service Worker (test mocking)
+  - unrs-resolver #     native module resolver (eslint import resolution)
