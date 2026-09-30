@@ -1,0 +1,59 @@
+# Dependabot configuration
+#
+# Cooldown alignment: `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`
+# (3 days), so pnpm refuses to install any version published more recently
+# than that. Without a matching cooldown here, Dependabot would open PRs for
+# fresh releases that `pnpm install` then declines to resolve — a stream of
+# red CI on PRs that only become installable days later. `default-days: 4`
+# keeps Dependabot one day behind pnpm's floor.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 4
+    groups:
+      # One PR per ecosystem instead of a dozen — these move in lockstep and
+      # are only meaningful reviewed together.
+      react:
+        patterns:
+          - react
+          - react-dom
+          - "@types/react"
+          - "@types/react-dom"
+      next:
+        patterns:
+          - next
+          - eslint-config-next
+          - "@next/*"
+      prisma:
+        patterns:
+          - prisma
+          - "@prisma/*"
+      supabase:
+        patterns:
+          - "@supabase/*"
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+      storybook:
+        patterns:
+          - storybook
+          - "@storybook/*"
+      dev-minor-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3

@@ -1,0 +1,438 @@
+// ============================================================
+// Clara Central — Referral Management Schema
+//
+// Multi-tenant (app-level scoping). Every domain row belongs to an
+// Organization; a user is linked to orgs via OrganizationMembership.
+// Isolation is enforced in application code (services take an explicit
+// `organizationId` — see getSessionContext / src/lib/services/*), NOT
+// via Postgres RLS. All existing data lives in the fixed "Default" org
+// (id = ORG_DEFAULT_ID in src/lib/organization.ts). Two principals per
+// org: admin + partner.
+// Domain primary keys are prefixed TypeIDs stored as `text`
+// (partner_…, ref_…, invoice_…) — auto-assigned by the Prisma
+// client extension in src/lib/prisma.ts. Auth-linked columns
+// referencing Supabase auth.users stay native uuid.
+//
+// Commission is per-partner: one rate on the Partner applies to all
+// their referrals. Earned commission is derived, never stored:
+// sum(paid invoices) × partner.commissionRate. Payouts are the
+// stored record of commission actually paid to partners.
+//
+// NOTE: domain PKs carry @default(cuid()) ONLY so Prisma marks `id`
+// as optional on create. The real id is a prefixed TypeID injected by
+// the client extension (src/lib/prisma.ts) before the query runs;
+// cuid() is a no-op fallback for any path that bypasses it (e.g. nested
+// writes). It is a client-side default, so it adds no SQL column default.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Enums ──
+
+enum user_role {
+  admin
+  partner
+}
+
+enum partner_status {
+  pending
+  approved
+  rejected
+}
+
+enum partner_entry_type {
+  invited
+  self_signup
+}
+
+enum referral_status {
+  submitted
+  contacted
+  meeting_scheduled
+  proposal_sent
+  negotiating
+  deal_closed
+  no_response
+  not_qualified
+  lost
+}
+
+enum invoice_status {
+  draft
+  sent
+  paid
+}
+
+enum invite_status {
+  pending
+  accepted
+  revoked
+  expired
+}
+
+enum marketing_item_kind {
+  file
+  link
+}
+
+enum activity_action {
+  created
+  updated
+  deleted
+  status_changed
+  approved
+  rejected
+  invoice_paid
+  payout_recorded
+  logged_in
+  logged_out
+}
+
+enum activity_entity_type {
+  partner
+  referral
+  invoice
+  payout
+  marketing_section
+  marketing_item
+  partner_invite
+  user
+}
+
+// ── Tenancy ──
+
+// A tenant. All domain data is scoped to one Organization. Created via code only
+// (createOrganization in src/lib/services/organization-service.ts) — no UI yet.
+// The fixed "Default" org (id = "org_default") holds all pre-multi-tenant data
+// and is the target for public self-signup (/apply). `isDemo` orgs are minted by
+// the future /demo feature and are the only ones a cleanup job may remove.
+model Organization {
+  id           String   @id @default(cuid()) // TypeID: org_… (Default uses fixed "org_default")
+  name         String
+  isDemo       Boolean  @default(false) @map("is_demo")
+  // Last time a demo visitor touched this org (spin-up or reuse). The demo
+  // cleanup job reaps `isDemo` orgs idle past the retention window by THIS, not
+  // createdAt, so an actively-returning visitor is never reaped mid-use.
+  lastActiveAt DateTime @default(now()) @map("last_active_at") @db.Timestamptz
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships       OrganizationMembership[]
+  partners          Partner[]
+  referrals         Referral[]
+  invoices          Invoice[]
+  payouts           Payout[]
+  invites           PartnerInvite[]
+  marketingSections MarketingSection[]
+  marketingItems    MarketingItem[]
+  activityLog       ActivityLog[]
+  appConfig         AppConfig?
+
+  @@index([isDemo, createdAt])
+  @@index([isDemo, lastActiveAt])
+  @@map("organizations")
+}
+
+// Links a user (auth identity) to an organization. Many-to-many so a user can
+// belong to several orgs later; iteration 1 provisions exactly one membership per
+// user, which getSessionContext resolves as the active org. Role stays global on
+// UserProfile for now (see user_role) — membership does not carry it yet.
+model OrganizationMembership {
+  id             String   @id @default(cuid()) // TypeID: orgmem_…
+  userId         String   @map("user_id") @db.Uuid
+  organizationId String   @map("organization_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         UserProfile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("organization_memberships")
+}
+
+// ── Auth ──
+
+// Slim profile mirroring a Supabase auth.users row. `id` IS the auth user id.
+model UserProfile {
+  id            String    @id @db.Uuid // = auth.users(id), managed by Supabase Auth
+  email         String
+  fullName      String    @map("full_name")
+  phone         String? // contact phone, editable from the account profile
+  avatarUrl     String?   @map("avatar_url")
+  // Notification preferences the admin sets on their own profile (mirrors
+  // Partner.notifyByEmail / notifyBySms). Email is the default channel; SMS is opt-in.
+  notifyByEmail Boolean   @default(true) @map("notify_by_email")
+  notifyBySms   Boolean   @default(false) @map("notify_by_sms")
+  role          user_role @default(partner)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  partner        Partner? // 1:1 — set when a partner activates a login
+  activityLog    ActivityLog[]
+  createdInvites PartnerInvite[]          @relation("InviteCreatedBy")
+  memberships    OrganizationMembership[]
+
+  @@map("user_profiles")
+}
+
+// ── Domain ──
+
+model Partner {
+  id               String             @id @default(cuid()) // TypeID: partner_…
+  organizationId   String             @map("organization_id")
+  // Global @unique: a UserProfile maps 1:1 to a Partner. Iteration 1 gives each
+  // user a single org membership, so one auth user = one partner. (A user being a
+  // partner in several orgs is a future change — composite unique + Partner[].)
+  userId           String?            @unique @map("user_id") @db.Uuid // auth link, null until they log in
+  fullName         String             @map("full_name")
+  email            String
+  // Public, hard-to-guess slug for the partner's shareable referral link
+  // (`/r/{referralCode}`). Assigned at creation; leads captured via the link are
+  // auto-attributed to this partner. See src/lib/ids.ts `newReferralCode`.
+  referralCode     String             @unique @map("referral_code")
+  phone            String?
+  companyName      String?            @map("company_name")
+  role             String? // their job title at their company
+  location         String?
+  website          String?
+  howDidYouHear    String?            @map("how_did_you_hear") // self-signup only
+  typesOfReferrals String?            @map("types_of_referrals") // self-signup only
+  // Profile picture — the public URL of an object in the `avatars` bucket. Set by
+  // the partner (or an admin) on the profile; mirrored onto the linked UserProfile.
+  avatarUrl        String?            @map("avatar_url")
+  // Notification preferences the partner sets on their own profile. Email is the
+  // default channel; SMS is opt-in.
+  notifyByEmail    Boolean            @default(true) @map("notify_by_email")
+  notifyBySms      Boolean            @default(false) @map("notify_by_sms")
+  status           partner_status     @default(pending)
+  entryType        partner_entry_type @map("entry_type")
+  // One rate per partner — applied to all their referrals. Defaults to the
+  // system standard (AppConfig.standardCommissionRate); admin-editable.
+  commissionRate   Decimal            @default(10.00) @map("commission_rate") @db.Decimal(5, 2)
+  lastLoginAt      DateTime?          @map("last_login_at") @db.Timestamptz
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         UserProfile?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  referrals    Referral[]
+  invoices     Invoice[]
+  payouts      Payout[]
+  invites      PartnerInvite[]
+
+  // Email is unique WITHIN an org (the same person may be a partner in several
+  // orgs later — and demo seed data reuses fixed emails across orgs).
+  // referralCode stays globally unique (public /r/ URL).
+  @@unique([organizationId, email])
+  @@index([organizationId, status, createdAt])
+  @@map("partners")
+}
+
+model Referral {
+  id              String          @id @default(cuid()) // TypeID: ref_…
+  organizationId  String          @map("organization_id")
+  partnerId       String          @map("partner_id")
+  contactName     String          @map("contact_name")
+  contactEmail    String?         @map("contact_email")
+  contactCompany  String?         @map("contact_company")
+  contactPhone    String?         @map("contact_phone")
+  contactWebsite  String?         @map("contact_website")
+  notes           String?
+  status          referral_status @default(submitted)
+  // Snapshot of the partner's commission rate AT CREATION TIME. Earned commission
+  // derives from THIS rate, not the live Partner.commissionRate — so editing a
+  // partner's rate never retroactively re-prices past referrals (TKT-005). New
+  // referrals snapshot the partner's current rate; admin rate edits are future-only.
+  commissionRate  Decimal         @default(10.00) @map("commission_rate") @db.Decimal(5, 2)
+  contractEndedAt DateTime?       @map("contract_ended_at") @db.Date // manual contract end
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz // also the commission-window anchor
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partner      Partner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  invoices     Invoice[]
+  payouts      Payout[]
+
+  @@index([organizationId, status, createdAt])
+  @@index([partnerId, status])
+  @@map("referrals")
+}
+
+model Invoice {
+  id             String         @id @default(cuid()) // TypeID: invoice_…
+  organizationId String         @map("organization_id")
+  number         String // human-facing, e.g. "INV-1990" (auto-gen when blank); unique per org
+  referralId     String         @map("referral_id")
+  partnerId      String         @map("partner_id") // denormalized from referral for partner-scoped queries
+  amount         Decimal        @db.Decimal(12, 2)
+  currency       String         @default("USD")
+  status         invoice_status @default(draft)
+  issuedDate     DateTime       @map("issued_date") @db.Date
+  paidDate       DateTime?      @map("paid_date") @db.Date
+  publicNote     String?        @map("public_note") // visible to the partner
+  privateNote    String?        @map("private_note") // internal only
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  referral     Referral     @relation(fields: [referralId], references: [id], onDelete: Cascade)
+  partner      Partner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, number])
+  @@index([referralId])
+  @@index([partnerId, status])
+  @@index([organizationId, status, issuedDate])
+  @@map("invoices")
+}
+
+// Commission actually paid out to a partner. Referral-level (referralId set)
+// or partner-level (referralId null). Distinct from earned commission, which
+// is derived from paid invoices.
+model Payout {
+  id             String   @id @default(cuid()) // TypeID: payout_…
+  organizationId String   @map("organization_id")
+  partnerId      String   @map("partner_id")
+  referralId     String?  @map("referral_id")
+  amount         Decimal  @db.Decimal(12, 2)
+  currency       String   @default("USD")
+  publicNote     String?  @map("public_note")
+  privateNote    String?  @map("private_note")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partner      Partner      @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  referral     Referral?    @relation(fields: [referralId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([partnerId])
+  @@index([referralId])
+  @@map("payouts")
+}
+
+// Admin → partner invitation. Stored token (the production-correct form of the
+// prototype's stateless /invite?data= URL); carries onboarding prefill.
+model PartnerInvite {
+  id              String        @id @default(cuid()) // TypeID: invite_…
+  organizationId  String        @map("organization_id")
+  email           String
+  token           String        @unique // global — appears in public /invite/{token} URL
+  fullName        String?       @map("full_name")
+  companyName     String?       @map("company_name")
+  location        String?
+  website         String?
+  // Commission rate the admin set at invite time; copied onto the Partner when
+  // the invite is accepted. Mirrors Partner.commissionRate / AppConfig default.
+  commissionRate  Decimal       @default(10.00) @map("commission_rate") @db.Decimal(5, 2)
+  status          invite_status @default(pending)
+  expiresAt       DateTime?     @map("expires_at") @db.Timestamptz
+  acceptedAt      DateTime?     @map("accepted_at") @db.Timestamptz
+  partnerId       String?       @map("partner_id")
+  createdByUserId String?       @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partner       Partner?     @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  createdByUser UserProfile? @relation("InviteCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([partnerId])
+  @@index([createdByUserId])
+  @@index([organizationId, email])
+  @@map("partner_invites")
+}
+
+// ── Marketing library ──
+
+model MarketingSection {
+  id             String   @id @default(cuid()) // TypeID: sec_…
+  organizationId String   @map("organization_id")
+  title          String
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  items        MarketingItem[]
+
+  @@index([organizationId])
+  @@map("marketing_sections")
+}
+
+model MarketingItem {
+  id             String              @id @default(cuid()) // TypeID: item_…
+  organizationId String              @map("organization_id")
+  sectionId      String              @map("section_id")
+  name           String
+  kind           marketing_item_kind
+  type           String // badge: PDF, PPTX, ZIP, IMAGE, LINK, …
+  url            String? // links: external URL
+  storagePath    String?             @map("storage_path") // files: Supabase Storage path
+  fileName       String?             @map("file_name")
+  coverImagePath String?             @map("cover_image_path") // optional admin-set card cover (any item kind)
+  coverHidden    Boolean             @default(false) @map("cover_hidden") // force the type placeholder even for image files
+  description    String? // HTML
+  sortOrder      Int                 @default(0) @map("sort_order")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  section      MarketingSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([sectionId])
+  @@map("marketing_items")
+}
+
+// ── Platform ──
+
+// Per-organization system config (one row per org). Holds that org's standard
+// commission rate and commission validity window. Keyed by organizationId (unique)
+// — reads/writes always go through the owning org (see app-config-service).
+model AppConfig {
+  id                     String   @id @default(cuid()) // TypeID: cfg_…
+  organizationId         String   @unique @map("organization_id")
+  standardCommissionRate Decimal  @default(10.00) @map("standard_commission_rate") @db.Decimal(5, 2)
+  commissionValidMonths  Int      @default(12) @map("commission_valid_months")
+  // Free-text note shown to partners on the Payouts page (e.g. payout cadence).
+  // Optional — when null/blank the note is omitted from the partner UI.
+  payoutCadenceNote      String?  @map("payout_cadence_note")
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("app_config")
+}
+
+// Audit trail. Polymorphic — `entityId` holds a TypeID (domain) or uuid (user).
+model ActivityLog {
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String               @map("organization_id")
+  userId         String?              @map("user_id") @db.Uuid
+  action         activity_action
+  entityType     activity_entity_type @map("entity_type")
+  entityId       String               @map("entity_id")
+  entityName     String?              @map("entity_name")
+  changes        Json?
+  metadata       Json?
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         UserProfile? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@map("activity_log")
+}

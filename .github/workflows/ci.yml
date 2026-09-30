@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege. Nothing here needs to write to the repo, and no job reads a
+# secret — so pull requests from forks run identically to branch pushes.
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # src/lib/prisma and src/types both import generated types.
+      - run: pnpm exec prisma generate
+
+      # Broader than the build's own check: tsconfig `include` covers tests/,
+      # e2e/, scripts/ and *.stories.tsx, none of which are in the Next.js
+      # build graph.
+      - run: pnpm typecheck
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec prisma generate
+
+      # tests/unit only — pure domain logic (commission engine, URL validation,
+      # time ranges), no database. Deliberately NOT `pnpm test`: that also picks
+      # up tests/integration/*.int.test.ts, which need a seeded Postgres.
+      # No DATABASE_URL is set here, and none is needed.
+      - run: pnpm test:unit
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Placeholder values only. The build must not require a reachable database
+      # or a real Supabase project — if this step starts failing without one,
+      # something began doing I/O at module scope.
+      - name: Build
+        run: pnpm build
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?pgbouncer=true
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: placeholder-publishable-key
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+          NEXT_PUBLIC_SITE_URL: http://localhost:3003
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    # Blocking on errors. Warnings are allowed through — the React Compiler rules
+    # are downgraded to warnings inside the vendored src/components/{reui,ui}/
+    # primitives (see eslint.config.mjs), so the count is non-zero by design. Add
+    # `--max-warnings` to `pnpm lint` if you ever want to ratchet that down.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec prisma generate
+
+      - run: pnpm lint
+
+# NOTE: the integration suites (tests/integration/*.int.test.ts) and Playwright
+# e2e specs both need a seeded database, so neither gates pull requests. The
+# integration tests self-skip when DATABASE_URL is absent, which is why the
+# `test` job above can run them out of the box. To make them gate, add a
+# Postgres service container plus `prisma migrate deploy` and `prisma db seed`
+# — do NOT wire repository secrets into a pull_request trigger, since fork PRs
+# would then run untrusted code against a real project.
